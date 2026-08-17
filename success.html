@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>تأكيد الحجز 🎉</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: #f4f7f6;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            direction: rtl;
+        }
+
+        .card {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            max-width: 400px;
+            width: 90%;
+        }
+
+        .success-icon {
+            color: #2ec4b6;
+            font-size: 50px;
+            margin-bottom: 10px;
+        }
+
+        .info-box {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 15px;
+            text-align: right;
+            font-size: 14px;
+            border: 1px solid #e9ecef;
+        }
+
+        .qr-container {
+            margin: 20px auto;
+            padding: 10px;
+            background: #ffffff;
+            display: inline-block;
+            border: 1px solid #eee;
+            border-radius: 8px;
+        }
+
+        .qr-container img {
+            display: block;
+            width: 200px;
+            height: 200px;
+        }
+
+        .btn {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            display: inline-block;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        .btn:hover {
+            background-color: #0056b3;
+        }
+
+        .status-msg {
+            font-size: 16px;
+            color: #6c757d;
+            margin: 15px 0;
+        }
+
+        .hidden { display: none; }
+    </style>
+</head>
+
+<body>
+
+    <div class="card">
+        <!-- حالة التحميل -->
+        <div id="loading-state">
+            <div class="status-msg">⏳ جاري التحقق من عملية الدفع...</div>
+        </div>
+
+        <!-- حالة النجاح فقط -->
+        <div id="success-state" class="hidden">
+            <div class="success-icon">✓</div>
+            <h2>تم تأكيد الحجز!</h2>
+            <p>إليك بيانات التذكرة الخاصة بك:</p>
+
+            <div class="info-box">
+                <p style="margin: 5px 0;"><strong>الاسم:</strong> <span id="display-name">---</span></p>
+                <p style="margin: 5px 0;"><strong>الهاتف:</strong> <span id="display-phone">---</span></p>
+                <p style="margin: 5px 0;"><strong>الكراسي:</strong> <span id="display-seats">---</span></p>
+                <p style="margin: 5px 0;"><strong>رقم الحجز:</strong> <span id="display-id">---</span></p>
+            </div>
+
+            <div class="qr-container">
+                <img id="qr-img" src="" alt="جاري تحميل QR Code..." />
+            </div>
+
+            <button class="btn" onclick="window.print()">طباعة التذكرة 🖨️</button>
+        </div>
+    </div>
+
+    <script>
+        window.addEventListener('load', async function () {
+            const urlParams = new URLSearchParams(window.location.search);
+            const bookingId = urlParams.get('bookingId');
+
+            // 1️⃣ فحص معلمات الرابط التي تعيدها فواتيرك عند الإلغاء أو الفشل
+            const invoiceStatus = (urlParams.get('invoice_status') || urlParams.get('status') || '').toLowerCase();
+            const paidParam = urlParams.get('paid');
+
+            // لو الرابط يحتوي على ما يشير للفشل أو الإلغاء -> تحويل فوري لصفحة cancel.html
+            if (
+                invoiceStatus === 'failed' || 
+                invoiceStatus === 'cancelled' || 
+                invoiceStatus === 'pending' || 
+                paidParam === 'false' || 
+                paidParam === '0'
+            ) {
+                window.location.href = `cancel.html${bookingId ? '?bookingId=' + encodeURIComponent(bookingId) : ''}`;
+                return;
+            }
+
+            if (!bookingId) {
+                window.location.href = 'cancel.html';
+                return;
+            }
+
+            // 2️⃣ التأكد من السيرفر وبوابة الدفع
+            try {
+                const res = await fetch(`/api/verify-booking?bookingId=${encodeURIComponent(bookingId)}`);
+                const data = await res.json();
+
+                // لو السيرفر لم يرجع حالة paid صريحة -> تحويل مباشر لـ cancel.html
+                if (!res.ok || data.status !== 'paid') {
+                    window.location.href = `cancel.html?bookingId=${encodeURIComponent(bookingId)}`;
+                    return;
+                }
+
+                // كشف بيانات التذكرة في حالة النجاح المؤكد فقط
+                const name = data.name || 'غير محدد';
+                const phone = data.phone || 'غير محدد';
+                const seats = Array.isArray(data.seats) ? data.seats.join(', ') : 'غير محدد';
+
+                document.getElementById('display-name').textContent = name;
+                document.getElementById('display-phone').textContent = phone;
+                document.getElementById('display-seats').textContent = seats;
+                document.getElementById('display-id').textContent = bookingId;
+
+                const rawText = `الاسم: ${name}\nالموبايل: ${phone}\nالكراسي: ${seats}\nالحجز: ${bookingId}`;
+                const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&charset-source=UTF-8&data=${encodeURIComponent(rawText)}`;
+                document.getElementById('qr-img').src = qrApiUrl;
+
+                document.getElementById('loading-state').classList.add('hidden');
+                document.getElementById('success-state').classList.remove('hidden');
+
+            } catch (err) {
+                console.error(err);
+                window.location.href = `cancel.html?bookingId=${encodeURIComponent(bookingId)}`;
+            }
+        });
+    </script>
+
+</body>
+
+</html>
