@@ -12,7 +12,7 @@ app.use(cors());
 app.use(express.static(__dirname));
 
 // 1️⃣ تعريف المتغير أولاً ثم الاتصال بقاعدة البيانات
-const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://kerolsghatas55_db_user:database@cluster0.fsjyibp.mongodb.net/tickets?retryWrites=true&w=majority";
+const MONGO_URI = process.env.MONGO_URI;
 
 mongoose.connect(MONGO_URI)
     .then(() => console.log('✅ Connected to MongoDB'))
@@ -33,15 +33,23 @@ const BookingSchema = new mongoose.Schema({
 const Booking = mongoose.model('Booking', BookingSchema);
 
 // المفاتيح
-const FAWATERK_API_KEY = process.env.FAWATERK_API_KEY || "6aa55de9c8d544b81924c0743b96d76c8d5d109f4ebfe8f8b6";
+const FAWATERK_API_KEY = process.env.FAWATERK_API_KEY;
 const FAWATERK_BASE_URL = "https://staging.fawaterk.com/api/v2";
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 
-// 2️⃣ جلب المقاعد المحجوزة
+// 2️⃣ جلب المقاعد المحجوزة (اتدفعت فعليًا، أو لسه في مرحلة الدفع من أقل من 7 دقايق)
 app.get('/api/booked-seats', async (req, res) => {
     try {
-        const bookings = await Booking.find({ status: { $in: ['PAID', 'PENDING'] } });
+        // حجز مؤقت (Hold) لمدة 7 دقايق وقت الدفع، عشان نمنع اتنين يدفعوا على نفس الكرسي
+        // لو الوقت عدى ومكملش الدفع، الكرسي بيرجع متاح تلقائيًا
+        const sevenMinsAgo = new Date(Date.now() - 4 * 60 * 1000);
+        const bookings = await Booking.find({
+            $or: [
+                { status: 'PAID' },
+                { status: 'PENDING', createdAt: { $gte: sevenMinsAgo } }
+            ]
+        });
         const reservedSeats = [];
         bookings.forEach(b => { if (Array.isArray(b.seats)) reservedSeats.push(...b.seats); });
         res.json({ bookedSeats: [...new Set(reservedSeats)] });
@@ -57,6 +65,19 @@ app.post('/api/create-payment', async (req, res) => {
         const { name, phone, seats, totalAmount } = req.body;
         if (!name || !phone || !seats || !seats.length || !totalAmount) {
             return res.status(400).json({ success: false, message: 'بيانات غير مكتملة' });
+        }
+
+        // نتأكد إن مفيش حد سبقه ودفع فعلاً أو بيدفع دلوقتي (خلال آخر 7 دقايق) على نفس الكراسي دي
+        const sevenMinsAgoCheck = new Date(Date.now() - 4 * 60 * 1000);
+        const conflict = await Booking.findOne({
+            seats: { $in: seats },
+            $or: [
+                { status: 'PAID' },
+                { status: 'PENDING', createdAt: { $gte: sevenMinsAgoCheck } }
+            ]
+        });
+        if (conflict) {
+            return res.status(409).json({ success: false, message: 'للأسف تم حجز أحد الكراسي المختارة بالفعل، برجاء اختيار كرسي آخر' });
         }
 
         const bookingId = 'BK-' + Date.now();
